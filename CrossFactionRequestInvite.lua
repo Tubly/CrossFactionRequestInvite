@@ -1,6 +1,8 @@
 local function getGameAccountIDByTravelPassButton(travelPassButton)
     local gameAccountID;
-    local friendIndex = travelPassButton:GetParent().id;
+    -- BetterFriendlist stores friendIndex directly on the travelPassButton;
+    -- the default UI stores it as .id on the parent button.
+    local friendIndex = travelPassButton.friendIndex or travelPassButton:GetParent().id;
     local numGameAccounts = C_BattleNet.GetFriendNumGameAccounts(friendIndex);
     if numGameAccounts > 1 then
         for i = 1, numGameAccounts do
@@ -24,13 +26,22 @@ local function onClick(travelPassButton)
 
     if gameAccountID then BNRequestInviteFriend(gameAccountID); end
 end
+local function getActiveTooltip()
+    local bflTooltip = rawget(_G, "BFL_Tooltip");
+    if bflTooltip and bflTooltip:IsShown() then
+        return bflTooltip;
+    end
+    return GameTooltip;
+end
+
 local function onEnter(travelPassButton)
     ExecuteFrameScript(travelPassButton, 'OnEnter');
     local gameAccountID = getGameAccountIDByTravelPassButton(travelPassButton);
 
     if gameAccountID then
-        GameTooltip:AddLine('Right-Click to force a request invite', 0, 1, 0);
-        GameTooltip:Show();
+        local tooltip = getActiveTooltip();
+        tooltip:AddLine('Right-Click to force a request invite', 0, 1, 0);
+        tooltip:Show();
     end
 end
 
@@ -85,7 +96,11 @@ local function handleFriendListButtons()
             button.CrossFactionRequestInviteButton:SetAllPoints();
             button.CrossFactionRequestInviteButton:RegisterForClicks('RightButtonDown');
             button.CrossFactionRequestInviteButton:SetScript('OnEnter', function() onEnter(button.travelPassButton); end);
-            button.CrossFactionRequestInviteButton:SetScript('OnLeave', function() GameTooltip:Hide(); end);
+            button.CrossFactionRequestInviteButton:SetScript('OnLeave', function()
+                GameTooltip:Hide();
+                local bflTooltip = rawget(_G, "BFL_Tooltip");
+                if bflTooltip then bflTooltip:Hide(); end
+            end);
             button.CrossFactionRequestInviteButton:SetScript('OnClick', function() onClick(button.travelPassButton); end);
             if not InCombatLockdown() then
                 passThroughLeftClick(button.CrossFactionRequestInviteButton);
@@ -96,9 +111,60 @@ local function handleFriendListButtons()
     end
 end
 
+local function attachButtonToBFL(button)
+    if not button.travelPassButton or button.CrossFactionRequestInviteButton then return end
+    button.CrossFactionRequestInviteButton = CreateFrame('BUTTON', nil, button.travelPassButton);
+    button.CrossFactionRequestInviteButton:SetAllPoints();
+    button.CrossFactionRequestInviteButton:RegisterForClicks('RightButtonDown');
+    button.CrossFactionRequestInviteButton:SetScript('OnEnter', function() onEnter(button.travelPassButton); end);
+    button.CrossFactionRequestInviteButton:SetScript('OnLeave', function()
+                GameTooltip:Hide();
+                local bflTooltip = rawget(_G, "BFL_Tooltip");
+                if bflTooltip then bflTooltip:Hide(); end
+            end);
+    button.CrossFactionRequestInviteButton:SetScript('OnClick', function() onClick(button.travelPassButton); end);
+    if not InCombatLockdown() then
+        passThroughLeftClick(button.CrossFactionRequestInviteButton);
+    else
+        addToCombatLockdownQueue(passThroughLeftClick, button.CrossFactionRequestInviteButton);
+    end
+end
+
+local function hookBetterFriendlist()
+    local BFL = rawget(_G, "BFL");
+    if not BFL or not BFL.GetModule then return end
+    local FriendsListModule = BFL:GetModule("FriendsList");
+    if not FriendsListModule then return end
+    hooksecurefunc(FriendsListModule, "UpdateFriendButton", function(_, button)
+        attachButtonToBFL(button);
+    end);
+end
+
 do
     if FriendsList_Update then
         hooksecurefunc('FriendsList_Update', handleFriendListButtons);
     end
     handleFriendListButtons();
+end
+
+-- BetterFriendlist may load before us (alphabetical order), in which case
+-- ADDON_LOADED for it has already fired. Check IsAddOnLoaded to be safe.
+local function isAddOnLoaded(name)
+    if C_AddOns and C_AddOns.IsAddOnLoaded then
+        return C_AddOns.IsAddOnLoaded(name);
+    end
+    local legacy = rawget(_G, "IsAddOnLoaded");
+    return legacy and legacy(name);
+end
+
+if isAddOnLoaded("BetterFriendlist") then
+    hookBetterFriendlist();
+else
+    eventFrame:RegisterEvent("ADDON_LOADED");
+    function eventFrame:ADDON_LOADED(addonName)
+        if addonName == "BetterFriendlist" then
+            self:UnregisterEvent("ADDON_LOADED");
+            hookBetterFriendlist();
+        end
+    end
 end
